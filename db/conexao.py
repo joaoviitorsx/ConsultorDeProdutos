@@ -1,14 +1,17 @@
 import mysql.connector
 from mysql.connector import Error
 
+#cnpj atacado = 32768826000272
+#cnpj jm = 00092104000173
+
 def conectar_com_banco():
     try:
         conexao = mysql.connector.connect(
-            host="autorack.proxy.rlwy.net",
+            host="localhost",
             user="root",
-            password="kQFyzyJcZRnjMirSCYZwhGivBQPegkbG",
-            database="railway",
-            port=19119
+            password="1234",
+            database="consulta_produtos",
+            port=3306
         )
         if conexao.is_connected():
             print('Conectado ao banco de dados')
