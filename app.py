@@ -1,20 +1,20 @@
 import sys
-import locale
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
 import re
 import os
+import locale
+import asyncio
 from PySide6 import QtWidgets, QtGui, QtCore
 from PySide6.QtGui import QIntValidator
-from utils.cnpj import processar_cnpjs, buscar_informacoes
-from utils.icone import baixar_icone, usar_icone
-from db.conexao import conectar_com_banco
-from PySide6.QtGui import QIntValidator
+from PySide6.QtCore import QThread, Signal, QObject
 from PySide6.QtWidgets import QMessageBox
-import asyncio
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+from db.conexao import conectar_com_banco
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Image, Spacer
+from utils.cnpj import processar_cnpjs, buscar_informacoes
+from utils.icone import baixar_icone, usar_icone
 
 locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
 
@@ -24,6 +24,40 @@ def recurso_caminho(relativo):
     return os.path.join(os.path.abspath("."), relativo)
     
 caminho_imagem = recurso_caminho("images\\icone.png")
+
+class LoginWorker(QThread):
+    login_success = Signal(str)
+    login_failed = Signal(str)
+
+    def __init__(self, username, password):
+        super().__init__()
+        self.username = username
+        self.password = password
+
+    def run(self):
+        try:
+            from db.conexao import conectar_com_banco
+            conexao = conectar_com_banco()
+            if not conexao:
+                self.login_failed.emit("Erro de conexão com o banco.")
+                return
+
+            cursor = conexao.cursor()
+            cursor.execute("USE consulta_produtos")
+            cursor.execute("SELECT senha FROM user WHERE nome = %s", (self.username,))
+            result = cursor.fetchone()
+
+            if not result:
+                self.login_failed.emit("Usuário não encontrado.")
+            elif self.password == result[0]:
+                self.login_success.emit(self.username)
+            else:
+                self.login_failed.emit("Senha incorreta.")
+
+            cursor.close()
+            conexao.close()
+        except Exception as e:
+            self.login_failed.emit(f"Erro inesperado: {str(e)}")
 
 class UserLogin(QtWidgets.QWidget):
     def __init__(self):
@@ -132,26 +166,25 @@ class UserLogin(QtWidgets.QWidget):
     def validate_login(self):
         user = self.user_input.text().strip()
         password = self.password_input.text().strip()
-        conexao = conectar_com_banco()
-        cursor = conexao.cursor()
-        cursor.execute("USE railway")
-        cursor.execute("SELECT senha FROM user WHERE nome = %s", (user,))
-        result = cursor.fetchone()
-        
-        if not result:
-            QtWidgets.QMessageBox.warning(self, 'Erro', 'Usuário ou senha inválidos.')
-            return
-        result = result[0]
-        
 
-        if password == result:
-            self.main_window = MainWindow(user)
-            usar_icone(self.main_window)
-            self.main_window.showMaximized()
-            self.close()
-        else:
-            QtWidgets.QMessageBox.warning(self, 'Erro', 'Usuário ou senha inválidos.')
-    
+        self.login_button.setEnabled(False)
+        self.login_button.setText("Verificando...")
+
+        self.worker = LoginWorker(user, password)
+        self.worker.login_success.connect(self.login_successful)
+        self.worker.login_failed.connect(self.login_failed)
+        self.worker.finished.connect(lambda: self.login_button.setEnabled(True))
+        self.worker.finished.connect(lambda: self.login_button.setText("Login"))
+        self.worker.start()
+
+    def login_successful(self, username):
+        self.main_window = MainWindow(username)
+        usar_icone(self.main_window)
+        self.main_window.showMaximized()
+        self.close()
+
+    def login_failed(self, message):
+        QMessageBox.warning(self, "Erro de Login", message)
     
 class MainWindow(QtWidgets.QWidget):
     def __init__(self, user):
@@ -398,6 +431,7 @@ class ProductWindowCESIM(QtWidgets.QWidget):
     def voltar(self):
         self.main_window.showMaximized()
         self.close()
+
 class ProductWindowCE(QtWidgets.QWidget):
     def __init__(self, main_window,razao_social, cnpj, cnae_valido, cnae_codigo, uf, simples, user):
         super().__init__()
@@ -643,7 +677,7 @@ class ProductWindowCE(QtWidgets.QWidget):
         product_code = self.product_code_input.text().strip()
         conexao = conectar_com_banco()
         cursor = conexao.cursor()
-        cursor.execute("USE railway")
+        cursor.execute("USE consulta_produtos")
         cursor.execute(f"SELECT produto, ncm, aliquota FROM tabela_tributacao_{user} WHERE codigo = %s", (product_code,))
         result = cursor.fetchone()
         # if user == 'atacado':
